@@ -1,0 +1,208 @@
+---
+title: "memory and speed tips in R" 
+format: html 
+editor: visual
+embed-resources: true
+---
+
+## Good memories, good times
+
+Using large dataset often comes with memory or runtime issues. Here we'll run through some ways that can reduce these issues. It's based in R, but many of the principles will apply when using Python or other software.
+
+**Even if you're not having memory issues, good memory management is a good habit to get into!**
+
+First, let's create some data. This will be used to demonstrate some of the benefits of writing performant code.
+
+```{r}
+library("tidyverse")  
+
+rcat <- function(n, levels, p, factor = TRUE) {
+  x <- sample(x = levels, size = n, replace = TRUE, prob = p)
+  if (factor) x <- factor(x, levels = levels)
+  x
+}  
+
+set.seed(42)  
+
+N <- 10000
+
+dataset <- tibble(
+  patient_id = seq_len(N),
+  age = as.integer(rnorm(N, 65, 15)),
+  sex = rcat(N, c("female", "male"), p = c(0.5,0.5)),
+  diabetes = rbernoulli(N, 0.2),
+  hba1c = round(rnorm(N, 25 + 10*diabetes, 10), 1),
+  hba1c_over60 = if_else(hba1c > 60, "yes", "no"),
+  death_date = as.Date("2021-01-01") +
+    as.integer({.x <- runif(N, 0, 3000 - 1000*diabetes); if_else(.x < 366, .x, NA)}) 
+)
+
+print(dataset)
+```
+
+## Stay classy
+
+A vector in R belongs to a *class*. The class determines what set of values are valid for the vector. Classes can be simple, like a `integer` or `character`, or more complicated like `datetime` or (there is *a lot* more to classes in R, as they apply to any object, not just vectors. But i'm not covering that here).
+
+Let's look at the class for each vector (column) in our dataset:
+
+```{r}
+
+map_chr(dataset, class)
+
+```
+
+Each class is actually just one of four different atomic *types*: `logical`, `integer`, `double`, and `character`. All classes belong to a particular type under-the-hood, with some additional rules determining how each value should be represented and processed.
+
+For example, a `factor` class is just an `integer` type in disguise, because each specific string in the factor has been mapped from an integer. For example, the `sex` column in the dataset is just an integer-type vector but with a rule saying "if the type value is 1 then the class value is the string 'female'; if the type value is 2 then the class value is the string 'male'". Similarly, `Date`s are `double`s in disguise, with a rule saying "if the type value is x then the class value is x days since 01-01-1970".
+
+Let's look at the type for each column in our dataset:
+
+```{r}
+
+map_chr(dataset, typeof)
+
+```
+
+Each type uses a different amount of memory to store its values. Generally speaking, the memory footprint from low to high is: `logical` = `integer` \< `double` = `character`. Let's look at the memory use (in bytes) for each column in our `{r} N` row dataset:
+
+```{r}
+
+map_dbl(dataset, object.size) 
+```
+
+If you're storing values as one type when they could be stored as a lower-memory type, then it's usually worth re-typing.
+
+The most likely savings in R you'll find in a routine analysis in R are swapping from a `numeric` (double) to an `integer` class, and from `character` to `factor`. Each of these will roughly halve the memory allocation for each vector.
+
+We can see this in action if we convert `hba1c_over60` vector from `character` to a `factor` or a `logical` vector:
+
+```{r}
+
+# character
+object.size(dataset$hba1c_over60)
+
+# factor (integer, with some overheads for mapping integer to character values)
+object.size(as.factor(dataset$hba1c_over60))
+
+# logical
+object.size(dataset$hba1c_over60=="yes")
+```
+
+Some tips:
+
+-   If a column contains only integer values, type it as an integer not a double. It’s common for integers to sneakily convert back to doubles. For example, if `x` is an integer, then `y <- x + 1` is a double, because `1` is a double and combining an integer and a double will give a double. Instead, use `y <- x + 1L` which is an integer because `1L` is an integer.
+
+-   A vector can have only one data type. Appending a vector with greater precision to a vector of lower precision – for instance `2.0` (double) instead of an `2L` (integer) – will lead to the entire column converting from integer to double. This fact is obvious to most R users but its easy for it to happen without realising, when using `bind_rows()` or `c()` calls for instance.
+
+-   If a column contains only a few different string values, it's usually better to convert it from a character to a factor. In fact, because there is no free-text info in OpenSAFELY, *in theory* all string-type variables, including derived variables, should only contain values from a known set, and so could all be represented as factors. But in practice this might not be simple to enforce, and might be actively unhelpful if lots of theoretically possible values are not actually represented. So some character variables are permissible. Use your judgement.
+
+-   Beware default behaviours when reading in text-based files (eg csv, tsv, txt, etc) as data.frames.
+
+## Trim the fat
+
+R global environments, and the objects within, will often be carrying more baggage than is needed. If you're running into memory issues, get rid of any large objects in memory that you don't need. Or better, avoid creating them in the first place.
+
+Objects can be removed from environments using `rm()`. This allows the memory it occupies to be used later on if needed. It doesn't actually give the memory back to the operating system, but that's ok because the memory is still available within R. You could also run `gc()` (garbage collection) to completely free-up the memory, but this is usually unnecessary (Note: ask the tech team whether this might have any benefits to the wider running of OS!)
+
+Another option is to write code that loads or processes data in functions, or within a `local({...})` call. In this case, none of the intermediate objects can saved to the global environment, avoid clutter and the need to explicitly remove using `rm()`.
+
+Even if you need an object, you might not need all the things inside it. Data frames containing superfluous columns is an obvious example. If you no longer need a column in your dataset, get rid of it if it's part of a memory-intensive script.
+
+Another culprit is model objects, like the objects created when executing a `glm()` or `coxph()` call. You can often make these objects smaller by using options like `data=FALSE`, `x=FALSE`, and `model=FALSE` in the model call, but this might not be the primary issue if the object is capturing a large environment; see the introduction to [`{butcher}`](https://butcher.tidymodels.org/) for more details about how model objects can become bloated and how you can deal with it.
+
+Some tips:
+
+-   Only import columns that get used. Remove unused columns or rows.
+
+<!-- -->
+
+-   Avoid creating columns that contain the same information as other columns, just in a different format. Defer prettification until needed.
+
+<!-- -->
+
+-   Store vectors that only containing a single value as global variables, or in a list, rather than as a column in a dataset that repeats the same value.
+
+-   Remove large objects from memory if they're no longer needed using `rm()`.
+
+-   Avoid storing the same information inside multiple datasets. Use look-up tables instead, and join the data on when needed. This might result in slightly slower code, but could massively lower the memory footprint.
+
+-   Use function calls or \`local()\` calls to avoid intermediate objects being saved into the global environment.
+
+<!-- -->
+
+-   Rather than importing data at the top of a script, import only when the data are needed.
+
+## Vectorisation
+
+Many operations in R are vectorised. `c(1,2,3) + c(3,2,1)` is an example of a vectorised operation; we don't need to explicitly loop through the 3 elements of the vectors, add them together elementally, and then concatenate the results to arrive at `c(4,4,4)`. Instead, the `+` operator handles all that for us, in a fast and efficient way (usually using a lower-level language like C++). For simple operations on simple objects, vectorisation usually happens automatically, perhaps without users even realising. But sometimes you have to work a little to make it happen. This might requires a bit of effort, but is well worth the reward.
+
+Doing this properly usually means finding a way to use in-built vectorized functions to do what you need to do. If you end up using `Vectorize()` to make a non-vectorised function a vectorised function, then this probably won't be as fast (it just allows the function to accept vectors instead of atomic objects and return element-wise operations on them, but it's not taking advantage of the speed of properly vectorised operations).
+
+Basically, if a function can take a vector or matrix (as opposed to a list!) as an input, then it is probably vectorised. Use these for column-wise operations in you dataset!
+
+## Loops
+
+If you can't vectorise some loop-like operation, that doesn't mean there aren't efficiencies to be had.
+
+If you use a for-loop when you could instead use the `lapply()`-family or `purrr::map()`-family functions, then you should use the latter. These aren't vectorised, in the sense that they're not doing vector operations in some lower-level language. They're still repeatedly calling a function on each element in the list. However, they still provide some advantages as they automatically handle memory allocation efficiently (as they know the size of the list to be returned) and don't leave behind temporary variables in your environment. You can do this with for-loops too, but you have to think about it more.
+
+## More threading, less dreading
+
+AKA: more splitting, less quitting. AKA: **parallelisation**!
+
+Parallelisation allows multiple processes to be run at once on different processors (or "cores", or "threads"), which usually means things run faster.
+
+Parallelisation in OpenSAFELY can be split into two distinct categories: **within-action** and **across-action** parallelisation.
+
+**Within-action parallelisation** will be a familiar approach to many analysts – use `{foreach}`/`{doparallel}`, `{future.apply}`, `{furrr}`, or similar to access multiple cores and run things in parallel, within a single script. While you can spread you processes across different cores in a single action, there is still a hard memory limit for each action which is the same regardless of the number of cores you're using.
+
+**Between-action parallelisation** is a complementary option in OpenSAFELY. Any two actions in an OS study pipeline that are not on the same (directed) path can be run in parallel. OS will *automatically* run actions in parallel if there is enough compute capacity. Users can exploit this to benefit from parallelisation without having to worry about setting up parallelisation within a script. Using [action parameters](https://docs.opensafely.org/ehrql/reference/language/#parameters) will be helpful in this scenario (there's no OS documentation on parameters for R actions!). One benefit of this approach is that if you can add a new parallelisable slice without having to re-run all slices. For example, say you want to run a model against threes outcomes. You set up your pipeline to run each model in a separate action, each with the same dependencies, using an action parameter to set the value of the outcome. You run these actions, then decide you want to add a fourth outcome. IN this case, you can just add a additional action to run against that outcome, and leave the other actions untouched. If instead you had set the three models to run within a single action (within-action parallelisation), then you'd have to re-run all models in order to run the fourth model.
+
+You can find the number of threads available by running `parallel::detectCores()`. This will probably be different on your local machine than on an OS backend, so you may want to use a different number of cores depending on whether you're running running on your machine (or codespaces) versus running against the real data. And be considerate! When running on the server, don't access so many cores for a single action that other users will suffer. If you need more than 8 cores to get close to a reasonable run time, then you should make other changes.
+
+Operations that are amenable to parallelisation include: exact matching; bootstrapping; multiple imputation; running the same type of analysis across different inputs (exposures, outcomes, adjustment sets, subgroups, etc); most flavours of sensitivity analyses, ...
+
+Remember that parallelisation scales well – if parallelisation doesn’t seem to make much difference (or is slightly worse) in 10k rows, it might still bring big benefits in 10m rows.
+
+## `{data.table}` / `{dtplyr}`
+
+[`{data.table}`](https://r-datatable.com/) is an R package that makes data wrangling operations extremely fast for large datasets. It will speed-up and RAM-down processing your big horrible datasets, your big horrible merge, your big horrible pivot, and your big horrible group-by aggregation.
+
+If you can use data.table, then **use `{data.table}`**. If you find data.table syntax a bit baffling (or don't want to invest the time to make it less baffling) and you're familiar with dplyr and tidyr, then **use `{dtplyr}`**. `{dtplyr}` looks like dplyr but uses `{data.table}` under the hood. It's a godsend for tidyverse aficionados.
+
+Don't ask for help with memory problems until you've first tried `{data.table}` or `{dtplyr}`! If you do, the answer will be "try data.table or dtplyr".
+
+You can see various examples of `{dtplyr}` in action in the [`covid-vax-history`](https://github.com/opensafely/covid-vaccine-history/) repository.
+
+## **R image v3**
+
+OpenSAFELY R image version 3 will include a switch from BLAS/LAPACK to OpenBLAS for linear algebra. This potentially results in operations that are [orders of magnitude faster](https://github.com/david-cortes/R-openblas-in-windows), and you don't have to do anything! I don't understand it, and neither you do, but that doesn't mean we don't get to benefit.
+
+[R v3 is not merged yet](https://github.com/opensafely-core/r-docker/pull/195), but when it is, use it.
+
+## A sample is ample
+
+You probably don't need to include all of the patients that you could be using. Certainly not during the first development cycle. In some cases, even after trying everything else above, you *still* won't be able to run your code on the full cohort of patients. So consider **sampling**.
+
+There are different approaches to this, from pure random sampling (take 10% of your cohort, for speed 90% gains), to more sophisticated approaches depending on the analytic task, where your statistical power is coming from, and which bits are slow.
+
+For example, if we're studying a cohort of 10m patients, but the outcome is extremely rare, occurring in just 100 patients. Then randomly sampling 10% of the cohort would leave us with about 10 outcome events, seriously harming statistical power. Instead, we could keep all 100 patients who experienced the outcome, but sample 10% from the remaining 9999900 event-free patients, leaving 999990. The analysis will need to be weighted to recover the right estimates. We weight by the inverse of the sampling probability, so in the example above, patients with the event have weight $w_{y=1} = 1 / 1 = 1$, and event-free patients have weight $w_{y=0} = 1/0.1 = 10$.
+
+Ruth Keogh has a paper coming out about this in the next few weeks.
+
+## Things to avoid
+
+-   `rowwise()`
+
+## More stuff
+
+**A note on costs**. Data platforms that cost based on data storage and compute are not uncommon. The flat-rate £25k/year OS costing model is not necessarily permanent, and it may move to a compute-based costing model in future (pure speculation! but don't rule it out).
+
+## Further reading
+
+-   <https://github.com/jennybc/row-oriented-workflows#readme>
+
+-   <https://adv-r.hadley.nz/perf-improve.html>
+
+-   <http://adv-r.had.co.nz/memory.html>
