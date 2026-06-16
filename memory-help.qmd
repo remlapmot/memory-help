@@ -1,5 +1,5 @@
 ---
-title: "memory and speed tips in R" 
+title: "Memory and speed tips in R" 
 format:
   html:
     embed-resources: true
