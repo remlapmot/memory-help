@@ -16,5 +16,5 @@
 /_book/
 
 # helper file the profvis source-pane demo writes out on each render
-grow_demo.R
+profvis_demo.R
 *.rmarkdown
