@@ -55,12 +55,17 @@ There are three questions worth answering, each with its own tool.
 
 library("profvis")
 
-profvis({
-  x <- c()
-  for (i in seq_len(50000)) {
-    x <- c(x, i^2)
-  }
-})
+# profvis only shows its line-by-line source view when the profiled code lives
+# in a file (source references are otherwise stripped when a doc is rendered),
+# so we write the snippet out first, then profile it
+writeLines(c(
+  "x <- c()",
+  "for (i in seq_len(50000)) {",
+  "  x <- c(x, i^2)",
+  "}"
+), "grow_demo.R")
+
+profvis(source("grow_demo.R", keep.source = TRUE))
 ```
 
 **Which of two approaches is faster?** [`{bench}`](https://bench.r-lib.org/) times competing implementations *and*, crucially, checks that they all return identical results — so you can't accidentally declare a "faster" version that's actually computing the wrong thing. (This is the key advantage over the older `{microbenchmark}`.)

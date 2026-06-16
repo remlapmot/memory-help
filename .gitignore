@@ -14,4 +14,7 @@
 *.utf8.md
 /_site/
 /_book/
+
+# helper file the profvis source-pane demo writes out on each render
+grow_demo.R
 *.rmarkdown
