@@ -265,6 +265,62 @@ Don't ask for help with memory problems until you've first tried `{data.table}` 
 
 You can see various examples of `{dtplyr}` in action in the [`covid-vax-history`](https://github.com/opensafely/covid-vaccine-history/) repository.
 
+## Get your ducks in a row {#efficient-formats}
+
+For genuinely large cohorts, *how* you store and read your data is often where the biggest wins hide — bigger than any amount of in-R micro-optimisation.
+
+**Reading text files (csv, tsv, …).** The most common own-goal is letting `read.csv()` / `read_csv()` guess every column type from the data. Guessing is slow, and it routinely guesses wrong (an all-digits ID column becomes a double; a column that looks numeric until row 900,000 gets read as character). **Tell it the types up front:**
+
+-   `readr::read_csv(file, col_types = ...)`
+
+-   base `read.csv(file, colClasses = ...)`
+
+-   or `data.table::fread()`, which is fast *and* types sensibly with little fuss.
+
+This is faster, more reliable, and is itself a re-typing win (see [Stay classy](#stay-classy)) — you read straight into `integer`/`factor` instead of reading wide and converting afterwards.
+
+**Columnar, compressed storage: parquet.** If you control the file format, prefer [parquet](https://parquet.apache.org/) over csv for intermediate and large datasets. It's columnar (so reading three columns out of fifty reads only those three — "column pushdown"), compressed (smaller on disk), typed (no guessing), and queryable *lazily*. The [`{arrow}`](https://arrow.apache.org/docs/r/) package (in both OS images) reads and writes it with `arrow::write_parquet()` / `arrow::read_parquet()`, or `arrow::open_dataset()` to query a whole directory of parquet files without loading them.
+
+**Larger-than-RAM querying: duckdb.** This is arguably the single highest-leverage modern addition for an OpenSAFELY-scale workload. [`{duckdb}`](https://duckdb.org/docs/api/r) (also in both images) is an in-process analytical database that plugs straight in as a [`{dbplyr}`](https://dbplyr.tidyverse.org/) backend. You write ordinary dplyr, duckdb runs it — out-of-core, across multiple cores — and only the result you ask for is ever pulled into R, with `collect()`. You can query data frames already in memory...
+
+```{r}
+#| eval: true
+
+library("dplyr")
+library("duckdb")
+
+con <- dbConnect(duckdb())
+duckdb_register(con, "dataset", dataset)   # registers the R object as a table, no copy
+
+tbl(con, "dataset") |>
+  group_by(sex) |>
+  summarise(n = n(), mean_hba1c = mean(hba1c, na.rm = TRUE)) |>
+  collect()
+```
+
+...or, more powerfully, query parquet **on disk that is never loaded into R at all** — so the dataset can be far larger than your memory limit:
+
+```{r}
+#| eval: true
+
+pq <- file.path(tempdir(), "cohort.parquet")
+
+# write the cohort to parquet (here via duckdb; arrow::write_parquet() also works)
+dbExecute(con, sprintf("COPY dataset TO '%s' (FORMAT parquet)", pq))
+
+# query the file lazily — only the filtered, aggregated result comes back into R
+tbl(con, sprintf("read_parquet('%s')", pq)) |>
+  filter(diabetes) |>
+  summarise(n = n(), mean_hba1c = mean(hba1c, na.rm = TRUE)) |>
+  collect()
+
+dbDisconnect(con, shutdown = TRUE)
+```
+
+Storing your big cohort as **parquet** and querying it with **duckdb/dbplyr**, pulling back only what you need, is the most powerful combination here for data that won't fit in memory.
+
+**Saving R objects (models, lists, …): qs2.** parquet is for *tabular* data; for everything else — fitted model objects, lists, imputation or bootstrap results — the usual `saveRDS()` is single-threaded and slow. [`{qs2}`](https://cran.r-project.org/package=qs2) (in the **v3** image) is a faster, smaller drop-in replacement: `qs2::qs_save(obj, "file.qs2")` and `qs2::qs_read("file.qs2")`. It's handy for caching an expensive intermediate object so a later action can read it back quickly.
+
 ## **R image v3**
 
 OpenSAFELY R image version 3 will include a switch from BLAS/LAPACK to OpenBLAS for linear algebra. This potentially results in operations that are [orders of magnitude faster](https://github.com/david-cortes/R-openblas-in-windows), and you don't have to do anything! I don't understand it, and neither you do, but that doesn't mean we don't get to benefit.
