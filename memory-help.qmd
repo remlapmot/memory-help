@@ -41,6 +41,47 @@ dataset <- tibble(
 print(dataset)
 ```
 
+## Measure for measure
+
+Before you optimise anything, find out what's actually slow. Intuition about R performance is notoriously unreliable — the bottleneck is very often *not* where you'd guess. The golden rule: **optimise the slow bit, not the bit you assume is slow.** A day spent hand-optimising a function that accounts for 2% of runtime is a day wasted.
+
+There are three questions worth answering, each with its own tool.
+
+**Where is the time going?** [`{profvis}`](https://profvis.r-lib.org/) runs your code and produces an interactive, line-level flame graph showing exactly which lines cost the most time and memory. Wrap any block of code in `profvis({...})` and explore the result. (Your code has to run long enough to be sampled — profvis takes a snapshot every few milliseconds, so anything that finishes in under a millisecond gives it nothing to measure.) Here we profile a deliberately bad pattern — growing a vector element-by-element in a loop — and the flame graph immediately fingers the `c()` call as the culprit. Why that's slow is the subject of [Copy-on-modify](#copy-on-modify-and-growing-objects) below.
+
+```{r}
+#| eval: true
+
+library("profvis")
+
+profvis({
+  x <- c()
+  for (i in seq_len(50000)) {
+    x <- c(x, i^2)
+  }
+})
+```
+
+**Which of two approaches is faster?** [`{bench}`](https://bench.r-lib.org/) times competing implementations *and*, crucially, checks that they all return identical results — so you can't accidentally declare a "faster" version that's actually computing the wrong thing. (This is the key advantage over the older `{microbenchmark}`.)
+
+```{r}
+#| eval: true
+
+library("bench")
+
+bench::mark(
+  base    = tapply(dataset$hba1c, dataset$sex, mean, na.rm = TRUE),
+  dplyr   = dataset |> group_by(sex) |> summarise(m = mean(hba1c, na.rm = TRUE)) |> pull(m),
+  check   = FALSE  # set TRUE when outputs are directly comparable
+)
+```
+
+**Where is the memory going?** `Rprof(memory.profiling = TRUE)` (base R, always available) records memory allocation alongside timing, and [`{profmem}`](https://cran.r-project.org/package=profmem) reports total allocations for a block of code — useful for catching hidden copies (see [Copy-on-modify](#copy-on-modify-and-growing-objects) below).
+
+::: callout-note
+`{profvis}` and `{bench}` are included in the **R image v3** but not v2. If you're on v2 (or any image without them), the base-R fallbacks are `system.time()` for crude timing and `Rprof()` / `summaryRprof()` for sampling profiles — less pretty, but always there.
+:::
+
 ## Stay classy
 
 A vector in R belongs to a *class*. The class determines what set of values are valid for the vector. Classes can be simple, like a `integer` or `character`, or more complicated like `datetime` or (there is *a lot* more to classes in R, as they apply to any object, not just vectors. But i'm not covering that here).
