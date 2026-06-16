@@ -4,3 +4,13 @@
 .Ruserdata
 
 /.quarto/
+
+**/*.quarto_ipynb
+
+# Quarto render artifacts — the self-contained .html (embed-resources) is committed,
+# everything else below is regenerated on each render and ignored
+/*_files/
+*.knit.md
+*.utf8.md
+/_site/
+/_book/
