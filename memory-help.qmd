@@ -327,6 +327,25 @@ OpenSAFELY R image version 3 will include a switch from BLAS/LAPACK to OpenBLAS 
 
 [R v3 is not merged yet](https://github.com/opensafely-core/r-docker/pull/195), but when it is, use it.
 
+### Don't oversubscribe your cores
+
+There is one catch worth knowing about. OpenBLAS is *itself* multithreaded — a single matrix operation can quietly use all your cores. That's a free win when it's the only thing running. But it can backfire when you combine it with explicit [parallelisation](#more-threading-less-dreading): if you fit linear-algebra-heavy models (lots of `glm()`s, say) inside a `{furrr}` / `{foreach}` / `{future.apply}` cluster, you now have *two* layers fighting for the same cores. Each of your N worker processes spawns its own M OpenBLAS threads, and N × M can far exceed the number of cores you actually have. This **oversubscription** makes threads contend and context-switch, and can run *slower* than either layer on its own.
+
+The fix is to control the nesting — usually, turn BLAS threading *down* to 1 while you parallelise explicitly, so each worker stays single-threaded:
+
+```{r}
+#| eval: false
+
+# In the v3 image, from within R:
+library("RhpcBLASctl")
+blas_set_num_threads(1)   # stop each worker spawning its own BLAS threads
+# ... now launch your furrr / foreach / future.apply cluster ...
+```
+
+On any image you can do the same thing from the shell *before* R starts, by setting an environment variable — `OMP_NUM_THREADS=1` or `OPENBLAS_NUM_THREADS=1`.
+
+The flip side: if your bottleneck is a single big matrix operation and you are *not* parallelising explicitly, do the opposite — leave OpenBLAS free to use all the cores and don't set up a cluster at all.
+
 ## A sample is ample
 
 You probably don't need to include all of the patients that you could be using. Certainly not during the first development cycle. In some cases, even after trying everything else above, you *still* won't be able to run your code on the full cohort of patients. So consider **sampling**.
