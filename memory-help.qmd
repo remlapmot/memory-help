@@ -106,7 +106,7 @@ map_chr(dataset, typeof)
 
 ```
 
-Each type uses a different amount of memory to store its values. Generally speaking, the memory footprint from low to high is: `logical` = `integer` \< `double` = `character`. Before we look at the memory use for each column, a quick aside on *measuring* it: the base `object.size()` is convenient but can mislead — it ignores memory shared between objects, and it reports some compact objects as if they were fully materialised. [`{lobstr}`](https://lobstr.r-lib.org/)'s `obj_size()` (in both OS images) is more accurate, so we use that here. Let's look at the memory use (in bytes) for each column in our `{r} N` row dataset:
+Each type uses a different amount of memory to store its values. Generally speaking, the memory footprint from low to high is: `logical` = `integer` \< `double` = `character`. Before we look at the memory use for each column, a quick aside on *measuring* it: the base `object.size()` is convenient but can mislead — it ignores memory shared between objects, and it reports some compact objects as if they were fully materialised. [`{lobstr}`](https://lobstr.r-lib.org/)'s `obj_size()` (in the v2 and v3 images) is more accurate, so we use that here. Let's look at the memory use (in bytes) for each column in our `{r} N` row dataset:
 
 ```{r}
 
@@ -139,9 +139,13 @@ Some tips:
 
 -   A vector can have only one data type. Appending a vector with greater precision to a vector of lower precision – for instance `2.0` (double) instead of an `2L` (integer) – will lead to the entire column converting from integer to double. This fact is obvious to most R users but its easy for it to happen without realising, when using `bind_rows()` or `c()` calls for instance.
 
+-   R's standard `integer` type maxes out at `.Machine$integer.max` – about 2.1 billion (2^31^ − 1). Go above that and it silently overflows to `NA` (with a warning). Patient counts won't get near it, but certain ID schemes, or a product of two large numbers, can. The [`{bit64}`](https://cran.r-project.org/package=bit64) package (in the v2 and v3 images) provides an `integer64` type for whole numbers up to about 9.2 × 10^18^, in the same 8 bytes a `double` would use.
+
 -   If a column contains only a few different string values, it's usually better to convert it from a character to a factor. In fact, because there is no free-text info in OpenSAFELY, *in theory* all string-type variables, including derived variables, should only contain values from a known set, and so could all be represented as factors. But in practice this might not be simple to enforce, and might be actively unhelpful if lots of theoretically possible values are not actually represented. So some character variables are permissible. Use your judgement. One caveat worth spelling out: converting to a factor only saves memory when the column has *few distinct values relative to its length*. Converting a high-cardinality column — one where almost every value is unique, like an ID — to a factor stores a full integer code for every row *plus* a complete table of levels, so it can cost more memory (and speed), not less.
 
 -   Beware default behaviours when reading in text-based files (eg csv, tsv, txt, etc) as data.frames.
+
+-   For heavy *purely numeric* work — lots of repeated row/column indexing, or feeding data into matrix algebra — consider holding it in a plain `matrix` rather than a `data.frame`/`tibble`. A data frame carries per-column overhead and its `[` indexing is comparatively slow; a matrix is one contiguous block. (This only applies when every column shares a single type, of course.)
 
 ## Trim the fat
 
@@ -281,9 +285,9 @@ For genuinely large cohorts, *how* you store and read your data is often where t
 
 This is faster, more reliable, and is itself a re-typing win (see [Stay classy](#stay-classy)) — you read straight into `integer`/`factor` instead of reading wide and converting afterwards.
 
-**Columnar, compressed storage: parquet.** If you control the file format, prefer [parquet](https://parquet.apache.org/) over csv for intermediate and large datasets. It's columnar (so reading three columns out of fifty reads only those three — "column pushdown"), compressed (smaller on disk), typed (no guessing), and queryable *lazily*. The [`{arrow}`](https://arrow.apache.org/docs/r/) package (in both OS images) reads and writes it with `arrow::write_parquet()` / `arrow::read_parquet()`, or `arrow::open_dataset()` to query a whole directory of parquet files without loading them.
+**Columnar, compressed storage: parquet.** If you control the file format, prefer [parquet](https://parquet.apache.org/) over csv for intermediate and large datasets. It's columnar (so reading three columns out of fifty reads only those three — "column pushdown"), compressed (smaller on disk), typed (no guessing), and queryable *lazily*. The [`{arrow}`](https://arrow.apache.org/docs/r/) package (in the v2 and v3 images) reads and writes it with `arrow::write_parquet()` / `arrow::read_parquet()`, or `arrow::open_dataset()` to query a whole directory of parquet files without loading them.
 
-**Larger-than-RAM querying: duckdb.** This is arguably the single highest-leverage modern addition for an OpenSAFELY-scale workload. [`{duckdb}`](https://duckdb.org/docs/api/r) (also in both images) is an in-process analytical database that plugs straight in as a [`{dbplyr}`](https://dbplyr.tidyverse.org/) backend. You write ordinary dplyr, duckdb runs it — out-of-core, across multiple cores — and only the result you ask for is ever pulled into R, with `collect()`. You can query data frames already in memory...
+**Larger-than-RAM querying: duckdb.** This is arguably the single highest-leverage modern addition for an OpenSAFELY-scale workload. [`{duckdb}`](https://duckdb.org/docs/api/r) (also in the v2 and v3 images) is an in-process analytical database that plugs straight in as a [`{dbplyr}`](https://dbplyr.tidyverse.org/) backend. You write ordinary dplyr, duckdb runs it — out-of-core, across multiple cores — and only the result you ask for is ever pulled into R, with `collect()`. You can query data frames already in memory...
 
 ```{r}
 #| eval: true
@@ -360,7 +364,15 @@ Ruth Keogh has a paper coming out about this in the next few weeks.
 
 ## Things to avoid
 
--   `rowwise()`
+-   `rowwise()` — it processes a data frame one row at a time, the very opposite of vectorisation. Reach for vectorised functions, `dplyr::across()`, or, if you genuinely need a row-wise operation, `purrr::pmap()`.
+
+-   `apply()` on a data frame — it silently coerces the whole thing to a matrix first, so a single character column drags every column to character. Use column-wise tools instead (`dplyr::across()`, `purrr::map()`, `lapply()`).
+
+-   `do.call(rbind, ...)`, or `rbind()` / `bind_rows()` *inside* a loop — this is the same quadratic-copying trap as [Copy that](#copy-on-modify-and-growing-objects). Collect the pieces into a list and combine them once at the end with `dplyr::bind_rows()`, `purrr::list_rbind()`, or `data.table::rbindlist()`.
+
+-   `ifelse()` on large vectors — it's slower than it needs to be and type-unstable (it can strip attributes and coerce types). Prefer `dplyr::if_else()` (strict about types), or `dplyr::case_when()` when there are several conditions.
+
+-   `<<-` (super-assignment) — it reaches up into an enclosing or global scope to modify a variable, which is hard to reason about and easy to get wrong. It's often a sign of an accumulation pattern that would be better as a vectorised operation or a pre-allocated result.
 
 ## More stuff
 
