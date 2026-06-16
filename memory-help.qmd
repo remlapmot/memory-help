@@ -183,6 +183,54 @@ Doing this properly usually means finding a way to use in-built vectorized funct
 
 Basically, if a function can take a vector or matrix (as opposed to a list!) as an input, then it is probably vectorised. Use these for column-wise operations in you dataset!
 
+## Copy that {#copy-on-modify-and-growing-objects}
+
+Under the hood, R uses **copy-on-modify**: when you change an object, R will often make a fresh copy of it rather than editing it in place. Most of the time you never notice. But it has one notorious consequence — **growing an object inside a loop is quadratically slow and quadratically memory-hungry.**
+
+Every time you run `x <- c(x, i)` (or `df <- bind_rows(df, new_row)`, or `result <- rbind(result, ...)`) inside a loop, R allocates a brand-new, slightly-bigger object and copies the *entire* contents across. Do that `n` times and you've copied roughly `n²/2` elements in total. This is exactly the pattern the [flame graph above](#measure-for-measure) pinned on `c()`.
+
+There are three fixes, in order of preference:
+
+1.  **Vectorise it** if you can (see above) — then there's no loop at all.
+
+2.  **Pre-allocate** the result to its final size and fill it in: `x <- numeric(n)`, then `x[i] <- ...` inside the loop. No copying, because the object never changes size.
+
+3.  If you don't know the final size, or you're building up rows, **collect into a list and combine once at the end** — `purrr::list_rbind()`, `dplyr::bind_rows()`, or `data.table::rbindlist()` on the whole list. That's one allocation instead of `n`.
+
+The cost is not subtle. Here are all three approaches building the vector of squares from the profiling example:
+
+```{r}
+#| eval: true
+#| warning: false
+
+library("bench")
+
+grow       <- function(n) { x <- c(); for (i in seq_len(n)) x <- c(x, i^2); x }
+prealloc   <- function(n) { x <- numeric(n); for (i in seq_len(n)) x[i] <- i^2; x }
+vectorised <- function(n) seq_len(n)^2
+
+bench::mark(
+  grow       = grow(20000),
+  prealloc   = prealloc(20000),
+  vectorised = vectorised(20000)
+)
+```
+
+The growing version allocates well over a **gigabyte** to produce a vector that occupies a couple of hundred kilobytes — almost all of it copies that are made and immediately thrown away. (Note that `bench::mark()` checks all three return *identical* results by default, so we know we're comparing like with like.)
+
+If you suspect an object is being copied when you didn't expect it, `tracemem()` will print a message every time R duplicates it:
+
+```{r}
+#| eval: false
+
+x <- 1:10
+tracemem(x)
+x[1] <- 99L      # prints a "tracemem[...] ->" message: a copy happened here
+untracemem(x)
+```
+
+This is also the deep reason [`{data.table}`](#datatable) is so memory-light: its `:=` operator modifies a table **in place**, *without* copying. Where a dplyr `mutate()` conceptually produces a whole new data frame, `dt[, newcol := ...]` edits the existing one. On a multi-gigabyte table, that difference can be the difference between an action that runs and one that falls over. More on data.table below.
+
 ## Loops
 
 If you can't vectorise some loop-like operation, that doesn't mean there aren't efficiencies to be had.
@@ -207,7 +255,7 @@ Operations that are amenable to parallelisation include: exact matching; bootstr
 
 Remember that parallelisation scales well – if parallelisation doesn’t seem to make much difference (or is slightly worse) in 10k rows, it might still bring big benefits in 10m rows.
 
-## `{data.table}` / `{dtplyr}`
+## `{data.table}` / `{dtplyr}` {#datatable}
 
 [`{data.table}`](https://r-datatable.com/) is an R package that makes data wrangling operations extremely fast for large datasets. It will speed-up and RAM-down processing your big horrible datasets, your big horrible merge, your big horrible pivot, and your big horrible group-by aggregation.
 
