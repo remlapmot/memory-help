@@ -3,6 +3,7 @@ title: "Memory and speed tips in R"
 format:
   html:
     embed-resources: true
+    toc: true
 editor: visual
 ---
 
