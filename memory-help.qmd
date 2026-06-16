@@ -330,7 +330,7 @@ Storing your big cohort as **parquet** and querying it with **duckdb/dbplyr**, p
 
 ## **R image v3**
 
-OpenSAFELY R image version 3 will include a switch from BLAS/LAPACK to OpenBLAS for linear algebra. This potentially results in operations that are [orders of magnitude faster](https://github.com/david-cortes/R-openblas-in-windows), and you don't have to do anything! I don't understand it, and neither you do, but that doesn't mean we don't get to benefit.
+OpenSAFELY R image version 3 will use OpenBLAS for linear algebra. This potentially results in operations that are [orders of magnitude faster](https://github.com/david-cortes/R-openblas-in-windows), and you don't have to do anything! I don't understand it, and neither you do, but that doesn't mean we don't get to benefit.
 
 [R v3 is not merged yet](https://github.com/opensafely-core/r-docker/pull/195), but when it is, use it.
 
