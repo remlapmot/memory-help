@@ -31,7 +31,7 @@ dataset <- tibble(
   patient_id = seq_len(N),
   age = as.integer(rnorm(N, 65, 15)),
   sex = rcat(N, c("female", "male"), p = c(0.5,0.5)),
-  diabetes = rbernoulli(N, 0.2),
+  diabetes = as.logical(rbinom(N, 1, 0.2)), # (swap as.logical for as.integer to get a 0/1 flag instead)
   hba1c = round(rnorm(N, 25 + 10*diabetes, 10), 1),
   hba1c_over60 = if_else(hba1c > 60, "yes", "no"),
   death_date = as.Date("2021-01-01") +
@@ -106,12 +106,14 @@ map_chr(dataset, typeof)
 
 ```
 
-Each type uses a different amount of memory to store its values. Generally speaking, the memory footprint from low to high is: `logical` = `integer` \< `double` = `character`. Let's look at the memory use (in bytes) for each column in our `{r} N` row dataset:
+Each type uses a different amount of memory to store its values. Generally speaking, the memory footprint from low to high is: `logical` = `integer` \< `double` = `character`. Before we look at the memory use for each column, a quick aside on *measuring* it: the base `object.size()` is convenient but can mislead — it ignores memory shared between objects, and it reports some compact objects as if they were fully materialised. [`{lobstr}`](https://lobstr.r-lib.org/)'s `obj_size()` (in both OS images) is more accurate, so we use that here. Let's look at the memory use (in bytes) for each column in our `{r} N` row dataset:
 
 ```{r}
 
-map_dbl(dataset, object.size) 
+map_dbl(dataset, \(x) as.numeric(lobstr::obj_size(x)))
 ```
+
+Notice that `patient_id` comes out *far* smaller than the other columns, even though it has just as many values. That's because `seq_len(N)` is stored as a compact "ALTREP" integer sequence — R keeps only the start, end and step, not all `{r} N` values. `object.size()` would have reported it at the full materialised size (around 40 KB); `obj_size()` sees the truth (a few hundred bytes). A good reminder that what you measure depends on how you measure.
 
 If you're storing values as one type when they could be stored as a lower-memory type, then it's usually worth re-typing.
 
@@ -122,13 +124,13 @@ We can see this in action if we convert `hba1c_over60` vector from `character` t
 ```{r}
 
 # character
-object.size(dataset$hba1c_over60)
+lobstr::obj_size(dataset$hba1c_over60)
 
 # factor (integer, with some overheads for mapping integer to character values)
-object.size(as.factor(dataset$hba1c_over60))
+lobstr::obj_size(as.factor(dataset$hba1c_over60))
 
 # logical
-object.size(dataset$hba1c_over60=="yes")
+lobstr::obj_size(dataset$hba1c_over60 == "yes")
 ```
 
 Some tips:
@@ -137,7 +139,7 @@ Some tips:
 
 -   A vector can have only one data type. Appending a vector with greater precision to a vector of lower precision – for instance `2.0` (double) instead of an `2L` (integer) – will lead to the entire column converting from integer to double. This fact is obvious to most R users but its easy for it to happen without realising, when using `bind_rows()` or `c()` calls for instance.
 
--   If a column contains only a few different string values, it's usually better to convert it from a character to a factor. In fact, because there is no free-text info in OpenSAFELY, *in theory* all string-type variables, including derived variables, should only contain values from a known set, and so could all be represented as factors. But in practice this might not be simple to enforce, and might be actively unhelpful if lots of theoretically possible values are not actually represented. So some character variables are permissible. Use your judgement.
+-   If a column contains only a few different string values, it's usually better to convert it from a character to a factor. In fact, because there is no free-text info in OpenSAFELY, *in theory* all string-type variables, including derived variables, should only contain values from a known set, and so could all be represented as factors. But in practice this might not be simple to enforce, and might be actively unhelpful if lots of theoretically possible values are not actually represented. So some character variables are permissible. Use your judgement. One caveat worth spelling out: converting to a factor only saves memory when the column has *few distinct values relative to its length*. Converting a high-cardinality column — one where almost every value is unique, like an ID — to a factor stores a full integer code for every row *plus* a complete table of levels, so it can cost more memory (and speed), not less.
 
 -   Beware default behaviours when reading in text-based files (eg csv, tsv, txt, etc) as data.frames.
 
