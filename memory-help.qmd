@@ -1,8 +1,9 @@
 ---
 title: "memory and speed tips in R" 
-format: html 
+format:
+  html:
+    embed-resources: true
 editor: visual
-embed-resources: true
 ---
 
 ## Good memories, good times
