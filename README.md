@@ -3,6 +3,12 @@ Some notes about reducing speed and memory when using R in OpenSAFELY.
 To render the html output run in a shell
 
 ```sh
+just render
+```
+
+or
+
+```sh
 quarto render
 ```
 
